@@ -13,10 +13,8 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Spatie\Permission\Models\Role;
 
-class TecnicoController extends Controller
-{
-  private function companyValidator($request)
-  {
+class TecnicoController extends Controller {
+  private function companyValidator($request) {
     $validator = Validator::make($request->all(), [
       'nome' => 'required|max:255',
       'email' => 'required|email|unique:users',
@@ -27,12 +25,20 @@ class TecnicoController extends Controller
     ]);
     return $validator;
   }
-  public function __construct()
-  {
+
+  private function validateUpdate($request) {
+    return Validator::make($request->all(), [
+      'nome' => 'required|max:255',
+      'email' => 'required|email',
+      'sobrenome' => 'required',
+      'cpf' => 'required|max:14|min:14',
+      'numero_registro' => 'required'
+    ]);
+  }
+  public function __construct() {
     //
   }
-  private function rolesSync(Request $request, $tecnico)
-  {
+  private function rolesSync(Request $request, $tecnico) {
     $rolesRequest = $request->except(['_token', '_method']);
     foreach ($rolesRequest as $key => $value) {
       $roles[] = Role::where('id', $key)->first();
@@ -45,8 +51,7 @@ class TecnicoController extends Controller
     }
     return $tecnico->id;
   }
-  public function store(Request $request)
-  {
+  public function store(Request $request) {
     $validator = $this->companyValidator($request);
     if ($validator->fails()) {
       return response()->json([
@@ -75,7 +80,6 @@ class TecnicoController extends Controller
       $tecnico = Tecnico::create($inputs);
       DB::commit();
     }catch (Exception $e) {
-      dd($e);
       DB::rollback();
       return response()->json(['message' => 'Erro ao cadastrar'], 500);
     }
@@ -83,11 +87,43 @@ class TecnicoController extends Controller
       return response()->json(['message' => 'success']);
     }
   }
+  public function update(Request $request, $id) {
+    $validator = validateUpdate($request);
+
+    if ($validator->fails()) {
+      return response()->json([
+        'message' => 'Validação inválida',
+        'errors'  => $validator->errors()
+      ], 422);
+    }
+    try {
+      DB::beginTransaction();
+
+      $tecnico = Tecnico::find($id);
+      $phone = Telefone::find($tecnico->id_telefone);
+      $user = User::find($tecnico->id_user);
+
+      $data = $request->all();
+      $data['numero'] = $request->telefone['numero'];
+      $data['codigo_area'] = $request->telefone['codigo_area'];
+
+      $tecnico->update($data);
+      $phone->update($data);
+      $user->update($data);
+
+      DB::commit();
+    }catch (Exception $e) {
+      DB::rollback();
+      return response()->json(['message' => 'Não foi possível alterar os dados.'], 500);
+    }
+    return response()->json(['message' => 'success']);
+  }
   public function findAll() {
     return Tecnico::select(
       'tecnico.id',
       'tecnico.nome as nome_tecnico',
       'tecnico.cpf as cpf_tecnico',
+      'tecnico.status'
     )->get();
   }
   public function findById($id) {
@@ -96,15 +132,40 @@ class TecnicoController extends Controller
       'tecnico.nome',
       'tecnico.sobrenome',
       'tecnico.cpf',
-      't.codigo_area as codigo_area',
-      't.numero as numero',
+      'tecnico.status',
       'u.email',
-      'tecnico.registro',
-      'tecnico.id_grupo'
+      'tecnico.numero_registro',
+      DB::raw('CONCAT(\'(\', t.codigo_area, \') \', t.numero) as phone')
     )
-    ->join('user as u', 'u.id', 'tecnico.id_user')
+    ->join('users as u', 'u.id', 'tecnico.id_user')
     ->join('telefone as t', 't.id', 'tecnico.id_telefone')
     ->where('tecnico.id', $id)
-    ->get();
+    ->first();
+  }
+  private function setStatus(bool $status, $id) {
+    try {
+      DB::beginTransaction();
+
+      $tecnico = Tecnico::find($id);
+
+      $tecnico->update(['status' => $status]);
+
+      DB::commit();
+    } catch (Exception $e) {
+      DB::rollback();
+      return array('response' => [
+        'message' => 'error',
+        'errors' => ['Não foi possível atualizar o status.']
+      ], 'status' => 500);
+    }
+    return array('response' => ['message' => 'success'], 'status' => 200);
+  }
+  public function disable($id) {
+    $result = $this->setStatus(false, $id);
+    return response()->json($result['response'], $result['status']);
+  }
+  public function enable($id) {
+    $result = $this->setStatus(true, $id);
+    return response()->json($result['response'], $result['status']);
   }
 }
